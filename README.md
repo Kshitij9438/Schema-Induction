@@ -247,5 +247,3 @@ Instead of hiding failure cases, it:
 That honesty is the point.
 
 
-Just tell me.
-```
