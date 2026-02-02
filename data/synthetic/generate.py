@@ -53,25 +53,49 @@ TIMES = [
 
 TEMPLATES = [
 
-    # amount + item
+    # -----------------------------
+    # Canonical templates (baseline)
+    # -----------------------------
+
     lambda a, i, p, t: f"I paid {a} for {i}",
     lambda a, i, p, t: f"{i.capitalize()} cost me {a}",
     lambda a, i, p, t: f"{a} was spent on {i}",
 
-    # amount + item + person
     lambda a, i, p, t: f"I paid {a} for {i} with {p}",
     lambda a, i, p, t: f"{p} and I spent {a} on {i}",
 
-    # amount + item + time
     lambda a, i, p, t: f"I paid {a} for {i} {t}",
     lambda a, i, p, t: f"{t.capitalize()}, I spent {a} on {i}",
 
-    # amount + item + person + time
     lambda a, i, p, t: f"I paid {a} for {i} with {p} {t}",
     lambda a, i, p, t: f"{p} and I spent {a} on {i} {t}",
 
-    # amount only (minimal context)
     lambda a, i, p, t: f"I spent {a}",
+
+    # -----------------------------
+    # Surface-form stress templates
+    # -----------------------------
+
+    # Inverted / reordered
+    lambda a, i, p, t: f"{a} for {i} I paid",
+    lambda a, i, p, t: f"{i} was {a}",
+    lambda a, i, p, t: f"{a} lunch payment",
+
+    # Telegraphed / minimal
+    lambda a, i, p, t: f"{a} {i}",
+    lambda a, i, p, t: f"{i} {a}",
+
+    # Verb dropped / implied
+    lambda a, i, p, t: f"{i} : {a}",
+    lambda a, i, p, t: f"{a} spent {i}",
+
+    # Person-leading
+    lambda a, i, p, t: f"{p} {a} {i}",
+    lambda a, i, p, t: f"{p} paid {a}",
+
+    # Time-leading
+    lambda a, i, p, t: f"{t} {a} {i}",
+    lambda a, i, p, t: f"{t} {i} {a}",
 ]
 
 # -----------------------------

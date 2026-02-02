@@ -56,11 +56,12 @@ This is equivalent to naming PCA axes.
 """
 
 CLUSTER_ROLE_MAP = {
-    1: "amount",    # numeric cluster
-    2: "item",      # expense items + context
-    3: "person",    # participant names
-    # Cluster 0 intentionally left unbound (structural/glue)
+    1: "amount",
+    2: "item",
+    3: "person",
+    0: "time",   # NEW: temporal role
 }
+
 
 
 # -----------------------------

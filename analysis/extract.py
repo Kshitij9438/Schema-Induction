@@ -1,37 +1,26 @@
 """
-Schema-free role-based extractor.
+Schema-free role-based extractor with policy layer.
 
-Purpose:
-- Take raw text input
-- Assign tokens to discovered roles
-- Produce structured output (JSON-like dict)
+This version adds a principled inference-time policy:
+- type sanity
+- subword hygiene
+- role sparsity
 
-This file:
-- Does NOT train
-- Does NOT cluster
-- Does NOT assume schema during learning
-
-It only uses:
-- trained role_head
-- discovered role clusters
-- post-hoc role bindings
+NO learning is modified.
 """
 
 from pathlib import Path
 from collections import defaultdict
 import json
+import re
 
 import torch
 import numpy as np
 
 from models.encoder import TokenEncoder
 from models.role_head import RoleProjectionHead
-from analysis.role_bindings import (
-    TOKEN_TO_CLUSTER,
-    CLUSTER_CENTROIDS,
-    CLUSTER_ROLE_MAP,
-    get_role_for_token,
-)
+from analysis.role_bindings import CLUSTER_CENTROIDS, CLUSTER_ROLE_MAP
+
 
 # -----------------------------
 # Paths & device
@@ -44,7 +33,30 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # -----------------------------
-# Helper functions
+# Policy configuration
+# -----------------------------
+
+ROLE_CONF_THRESHOLDS = {
+    "amount": 0.85,
+    "item": 0.70,
+    "person": 0.75,
+    "time": 0.65,   # time is fuzzier by nature
+}
+
+
+NUMERIC_PATTERN = re.compile(r"^\d+$")
+FUNCTION_WORDS = {
+    "i", "me", "the", "and", "for", "on", "with", "was", "is", "this", "today", "yesterday"
+}
+TIME_TOKENS = {
+    "today", "yesterday", "tonight", "tomorrow",
+    "morning", "evening", "night",
+    "last", "now"
+}
+
+
+# -----------------------------
+# Helpers
 # -----------------------------
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -52,19 +64,11 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def nearest_role(embedding: np.ndarray):
-    """
-    Assign role by nearest cluster centroid.
-
-    Returns:
-        (role_name, confidence) or (None, None)
-    """
-    best_role = None
-    best_score = -1.0
+    best_role, best_score = None, -1.0
 
     for cid, role in CLUSTER_ROLE_MAP.items():
         centroid = CLUSTER_CENTROIDS[cid]
         score = cosine_similarity(embedding, centroid)
-
         if score > best_score:
             best_score = score
             best_role = role
@@ -72,22 +76,37 @@ def nearest_role(embedding: np.ndarray):
     return best_role, best_score
 
 
+def passes_policy(token: str, role: str, confidence: float) -> bool:
+    # Confidence gate
+    if confidence < ROLE_CONF_THRESHOLDS.get(role, 1.0):
+        return False
+
+    # Subword hygiene
+    if token.startswith("##"):
+        return False
+
+    # Type sanity
+    if role == "amount":
+        return bool(NUMERIC_PATTERN.match(token))
+    if role == "time":
+        # Temporal plausibility check
+        if token in TIME_TOKENS:
+            return True
+        return False
+
+    if role in {"item", "person"}:
+        if token in FUNCTION_WORDS:
+            return False
+        return token.isalpha()
+
+    return True
+
+
 # -----------------------------
-# Main extraction logic
+# Main extraction
 # -----------------------------
 
 def extract(text: str) -> dict:
-    """
-    Extract structured information from raw text.
-
-    Args:
-        text: input sentence
-
-    Returns:
-        dict with role -> extracted values
-    """
-
-    # Load models
     encoder = TokenEncoder().to(DEVICE)
     encoder.eval()
 
@@ -95,7 +114,7 @@ def extract(text: str) -> dict:
     role_head.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
     role_head.eval()
 
-    results = defaultdict(list)
+    candidates = defaultdict(list)
 
     with torch.no_grad():
         token_embs, _ = encoder([text])
@@ -104,39 +123,62 @@ def extract(text: str) -> dict:
         tokens = encoder.tokenizer.tokenize(text)
 
         for tok, emb in zip(tokens, role_embs[0]):
-            emb_np = emb.cpu().numpy()
-
-            role, confidence = nearest_role(emb_np)
+            role, confidence = nearest_role(emb.cpu().numpy())
 
             if role is None:
                 continue
 
-            # Optional confidence threshold (conservative)
-            if confidence < 0.4:
+            if not passes_policy(tok, role, confidence):
                 continue
 
-            results[role].append(
+            candidates[role].append(
                 {
                     "token": tok,
-                    "confidence": round(confidence, 3),
+                    "confidence": confidence,
                 }
             )
 
-    return dict(results)
+    # Role sparsity: keep best per role
+    final = {}
+    meta = {}
+
+    # ---- Core schema roles ----
+    for role in {"amount", "item"}:
+        items = candidates.get(role)
+        if items:
+            best = max(items, key=lambda x: x["confidence"])
+            final[role] = best["token"]
+
+    # ---- Optional metadata ----
+    time_items = candidates.get("time")
+    if time_items:
+        best = max(time_items, key=lambda x: x["confidence"])
+        meta["time"] = best["token"]
+
+    if meta:
+        final["meta"] = meta
+
+
+    return final
 
 
 # -----------------------------
-# CLI usage
+# CLI demo
 # -----------------------------
 
 if __name__ == "__main__":
     examples = [
         "I paid 450 for lunch with Rahul yesterday",
-        "Spent 1200 on rent",
+        "450 lunch",
+        "Rahul 1200 rent",
         "Coffee cost me 250 today",
+        "yesterday 500 coffee",
+        "I paid 450 for lunch yesterday",
+        "yesterday 500 coffee",
+        "Coffee 250 today",
+        "last night 1200 rent",
     ]
 
     for text in examples:
         print("\nTEXT:", text)
-        output = extract(text)
-        print(json.dumps(output, indent=2))
+        print(json.dumps(extract(text), indent=2))
