@@ -5,7 +5,7 @@ This script:
 - Loads trained role_head
 - Runs encoder + role_head on corpus (on-the-fly)
 - Aggregates role embeddings per token
-- Clusters tokens in role space (k-means)
+- Clusters tokens in role space (K-Means)
 - Saves cluster centroids and token assignments
 
 This is the bridge between:
@@ -15,8 +15,8 @@ role discovery → role-based extraction
 from pathlib import Path
 from collections import defaultdict
 
-import torch
 import numpy as np
+import torch
 from sklearn.cluster import KMeans
 
 from models.encoder import TokenEncoder
@@ -40,6 +40,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Utilities
 # -----------------------------
 
+
 def load_sentences():
     with RAW_SENTENCES_PATH.open("r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
@@ -49,15 +50,17 @@ def load_sentences():
 # Clustering logic
 # -----------------------------
 
+
 def cluster_roles(
     num_clusters: int = 4,
     random_state: int = 42,
 ):
     """
-    Cluster tokens by their role embeddings.
+    Cluster tokens by their learned role embeddings.
 
     Args:
-        num_clusters: expected number of latent roles
+        num_clusters:
+            Number of latent role clusters.
     """
 
     print(f"🖥️ Using device: {DEVICE}")
@@ -69,24 +72,39 @@ def cluster_roles(
     encoder = TokenEncoder().to(DEVICE)
     encoder.eval()
 
-    role_head = RoleProjectionHead(input_dim=encoder.hidden_size).to(DEVICE)
-    role_head.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+    role_head = RoleProjectionHead(
+        input_dim=encoder.hidden_size
+    ).to(DEVICE)
+
+    role_head.load_state_dict(
+        torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+    )
     role_head.eval()
 
     token_vectors = defaultdict(list)
 
-    # Collect role embeddings
+    # -------------------------------------------------
+    # Collect aligned role embeddings
+    # -------------------------------------------------
+
     with torch.no_grad():
         for sentence in sentences:
-            token_embs, _ = encoder([sentence])
-            role_embs = role_head(token_embs)
 
-            tokens = encoder.tokenizer.tokenize(sentence)
+            # Single source of truth
+            tokens, token_embs = encoder.encode_with_tokens(sentence)
 
-            for tok, emb in zip(tokens, role_embs[0]):
-                token_vectors[tok].append(emb.cpu().numpy())
+            # Projection head expects batch dimension
+            role_embs = role_head(token_embs.unsqueeze(0))[0]
 
-    # Aggregate per token (mean)
+            for tok, emb in zip(tokens, role_embs):
+                token_vectors[tok].append(
+                    emb.cpu().numpy()
+                )
+
+    # -------------------------------------------------
+    # Aggregate embeddings
+    # -------------------------------------------------
+
     tokens = []
     vectors = []
 
@@ -96,17 +114,23 @@ def cluster_roles(
 
     X = np.vstack(vectors)
 
-    print(f"🔢 Clustering {len(tokens)} tokens into {num_clusters} clusters")
+    print(
+        f"🔢 Clustering {len(tokens)} tokens into "
+        f"{num_clusters} clusters"
+    )
 
-    # K-means clustering in role space
+    # -------------------------------------------------
+    # K-Means
+    # -------------------------------------------------
+
     kmeans = KMeans(
         n_clusters=num_clusters,
         random_state=random_state,
         n_init=10,
     )
+
     cluster_ids = kmeans.fit_predict(X)
 
-    # Build outputs
     token_to_cluster = {
         tok: int(cid)
         for tok, cid in zip(tokens, cluster_ids)
@@ -114,7 +138,6 @@ def cluster_roles(
 
     centroids = kmeans.cluster_centers_
 
-    # Save results
     torch.save(
         {
             "token_to_cluster": token_to_cluster,
@@ -125,14 +148,19 @@ def cluster_roles(
 
     print(f"✅ Saved role clusters to: {OUTPUT_PATH}")
 
-    # Print cluster contents (for inspection)
+    # -------------------------------------------------
+    # Display discovered clusters
+    # -------------------------------------------------
+
     clusters = defaultdict(list)
+
     for tok, cid in token_to_cluster.items():
         clusters[cid].append(tok)
 
     print("\n📦 Discovered role clusters:")
-    for cid, toks in clusters.items():
-        print(f"  Cluster {cid}: {sorted(toks)}")
+
+    for cid in sorted(clusters):
+        print(f"  Cluster {cid}: {sorted(clusters[cid])}")
 
 
 # -----------------------------

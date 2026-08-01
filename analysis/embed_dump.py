@@ -15,6 +15,7 @@ This file does NOT:
 
 from pathlib import Path
 from collections import defaultdict
+
 import torch
 
 from models.encoder import TokenEncoder
@@ -38,6 +39,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Utilities
 # -----------------------------
 
+
 def load_sentences():
     with RAW_SENTENCES_PATH.open("r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
@@ -46,6 +48,7 @@ def load_sentences():
 # -----------------------------
 # Main logic
 # -----------------------------
+
 
 def dump_embeddings():
     print(f"🖥️ Using device: {DEVICE}")
@@ -68,19 +71,24 @@ def dump_embeddings():
             f"Did you train the model before dumping embeddings?"
         )
 
-    role_head.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+    role_head.load_state_dict(
+        torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+    )
     role_head.eval()
 
     token_embeddings = defaultdict(list)
 
     with torch.no_grad():
         for sentence in sentences:
-            token_embs, mask = encoder([sentence])
-            role_embs = role_head(token_embs)
+            # Single source of truth for tokenization + embeddings
+            tokens, token_embs = encoder.encode_with_tokens(sentence)
 
-            tokens = encoder.tokenizer.tokenize(sentence)
+            # RoleProjectionHead expects a batch dimension
+            role_embs = role_head(token_embs.unsqueeze(0))[0]
 
-            for tok, emb in zip(tokens, role_embs[0]):
+            # Guaranteed alignment:
+            # tokens[i] <-> role_embs[i]
+            for tok, emb in zip(tokens, role_embs):
                 token_embeddings[tok].append(emb.cpu())
 
     # Convert lists to tensors

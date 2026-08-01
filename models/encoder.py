@@ -56,9 +56,6 @@ class TokenEncoder(nn.Module):
         """
         Encode a batch of sentences.
 
-        Args:
-            sentences: list of raw text strings
-
         Returns:
             token_embeddings:
                 Tensor of shape (batch_size, seq_len, hidden_dim)
@@ -67,7 +64,6 @@ class TokenEncoder(nn.Module):
                 Tensor of shape (batch_size, seq_len)
         """
 
-        # Tokenize
         encoded = self.tokenizer(
             sentences,
             padding=True,
@@ -79,13 +75,72 @@ class TokenEncoder(nn.Module):
         input_ids = encoded["input_ids"]
         attention_mask = encoded["attention_mask"]
 
-        # Forward through transformer
         outputs = self.encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
         )
 
-        # Token-level embeddings
         token_embeddings = outputs.last_hidden_state
 
         return token_embeddings, attention_mask
+
+    @torch.no_grad()
+    def encode_with_tokens(
+        self,
+        sentence: str,
+    ):
+        """
+        Encode a single sentence and return aligned
+        (tokens, embeddings).
+
+        Returns
+        -------
+        tokens : List[str]
+            Tokens exactly matching the returned embeddings.
+
+        embeddings : torch.Tensor
+            Shape: (num_real_tokens, hidden_size)
+        """
+
+        encoded = self.tokenizer(
+            sentence,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+            add_special_tokens=True,
+        )
+
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+
+        outputs = self.encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+
+        token_embeddings = outputs.last_hidden_state[0]
+
+        all_tokens = self.tokenizer.convert_ids_to_tokens(
+            input_ids[0]
+        )
+
+        tokens = []
+        embeddings = []
+
+        for tok, emb, mask in zip(
+            all_tokens,
+            token_embeddings,
+            attention_mask[0],
+        ):
+            if mask.item() == 0:
+                continue
+
+            if tok in self.tokenizer.all_special_tokens:
+                continue
+
+            tokens.append(tok)
+            embeddings.append(emb)
+
+        embeddings = torch.stack(embeddings)
+
+        return tokens, embeddings
